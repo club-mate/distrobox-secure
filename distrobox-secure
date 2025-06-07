@@ -1,0 +1,559 @@
+#!/bin/bash
+
+# Hardened Distrobox Manager
+# Creates secure Distrobox instances with isolated home directories
+# and comprehensive opt-in permission system
+
+set -euo pipefail
+
+SCRIPT_NAME="$(basename "$0")"
+DISTROBOX_BASE_DIR="${HOME}/.local/share/distrobox-secure"
+CONFIG_DIR="${HOME}/.config/distrobox-secure"
+PERMISSIONS_FILE="${CONFIG_DIR}/permissions.conf"
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Logging function
+log() {
+    echo -e "${GREEN}[INFO]${NC} $*"
+}
+
+warn() {
+    echo -e "${YELLOW}[WARN]${NC} $*"
+}
+
+error() {
+    echo -e "${RED}[ERROR]${NC} $*" >&2
+}
+
+# Initialize directories
+init_dirs() {
+    mkdir -p "$DISTROBOX_BASE_DIR"
+    mkdir -p "$CONFIG_DIR"
+    
+    if [[ ! -f "$PERMISSIONS_FILE" ]]; then
+        cat > "$PERMISSIONS_FILE" << 'EOF'
+# Distrobox Secure Permissions Configuration
+# Format: container_name:permission_type:value
+# 
+# FILESYSTEM PERMISSIONS:
+# home_folder:/path/to/folder     - Mount specific host directory
+# mount:/src/path:/dst/path       - Mount with custom destination
+# 
+# NETWORK PERMISSIONS:
+# network:host                    - Enable host networking
+# network:bridge                  - Use bridge networking
+# 
+# DISPLAY PERMISSIONS:
+# x11:enable                      - Enable X11 forwarding
+# wayland:enable                  - Enable Wayland support
+# 
+# HARDWARE PERMISSIONS:
+# audio:enable                    - Enable audio passthrough
+# gpu:enable                      - Enable GPU access
+# usb:enable                      - Enable USB device access
+# webcam:enable                   - Enable webcam access
+# 
+# NAMESPACE ISOLATION (disable these for more access):
+# unshare_netns:false            - Disable network namespace isolation
+# unshare_devsys:false           - Disable /dev and /sys isolation
+# unshare_groups:false           - Disable group isolation
+# unshare_ipc:false              - Disable IPC isolation
+# unshare_process:false          - Disable process isolation
+# unshare_all:false              - Disable all namespace isolation
+# 
+# SECURITY PERMISSIONS:
+# privileged:enable              - Run in privileged mode (NOT RECOMMENDED)
+# root:enable                    - Allow root access
+# init:enable                    - Enable init system
+# hostname:custom_name           - Set custom hostname
+# 
+# ADDITIONAL CAPABILITIES:
+# cap_add:SYS_ADMIN              - Add specific capabilities
+# security_opt:seccomp=unconfined - Modify security options
+# 
+# Examples:
+# mycontainer:home_folder:/home/user/Documents
+# mycontainer:network:host
+# mycontainer:audio:enable
+# mycontainer:unshare_netns:false
+# mycontainer:mount:/media/external:/mnt/external
+
+EOF
+        log "Created permissions config at $PERMISSIONS_FILE"
+    fi
+}
+
+# Check dependencies
+check_deps() {
+    local deps=("distrobox" "podman")
+    for dep in "${deps[@]}"; do
+        if ! command -v "$dep" &> /dev/null; then
+            error "$dep is not installed"
+            exit 1
+        fi
+    done
+}
+
+# Create isolated home directory for container
+create_isolated_home() {
+    local container_name="$1"
+    local isolated_home="${DISTROBOX_BASE_DIR}/${container_name}-home"
+    
+    if [[ ! -d "$isolated_home" ]]; then
+        mkdir -p "$isolated_home"
+        
+        # Create basic structure
+        mkdir -p "$isolated_home"/{Desktop,Documents,Downloads,Pictures,Videos,Music}
+        
+        # Create minimal shell config
+        cat > "$isolated_home/.bashrc" << 'EOF'
+# Isolated Distrobox environment
+export PS1='\[\033[01;31m\][DISTROBOX-SECURE]\[\033[00m\] \[\033[01;32m\]\u@\h\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ '
+echo "Welcome to your secure isolated Distrobox environment!"
+echo "Run 'distrobox-secure --help' for permission management."
+echo "Current isolation status:"
+echo "  - Isolated home directory: $(pwd)"
+echo "  - Network: $(ip route 2>/dev/null | grep -q default && echo 'Connected' || echo 'Isolated')"
+echo "  - Process namespace: $(ps aux | wc -l) processes visible"
+EOF
+        
+        log "Created isolated home directory: $isolated_home"
+    fi
+    
+    echo "$isolated_home"
+}
+
+# Get permissions for container
+get_permissions() {
+    local container_name="$1"
+    local permissions=()
+    local unshare_flags=()
+    
+    # Default security settings (can be overridden by permissions)
+    local unshare_netns=true
+    local unshare_devsys=true
+    local unshare_groups=true
+    local unshare_ipc=true
+    local unshare_process=true
+    local unshare_all=false
+    
+    # Read permissions from config file
+    if [[ -f "$PERMISSIONS_FILE" ]]; then
+        while IFS=':' read -r name perm_type perm_value; do
+            # Skip comments and empty lines
+            [[ "$name" =~ ^[[:space:]]*# ]] && continue
+            [[ -z "$name" ]] && continue
+            
+            if [[ "$name" == "$container_name" ]]; then
+                case "$perm_type" in
+                    # Filesystem permissions
+                    "home_folder")
+                        permissions+=("--volume" "${perm_value}:${perm_value}:rw")
+                        ;;
+                    "mount")
+                        IFS=':' read -r src_path dst_path <<< "$perm_value"
+                        permissions+=("--volume" "${src_path}:${dst_path}:rw")
+                        ;;
+                    
+                    # Network permissions
+                    "network")
+                        case "$perm_value" in
+                            "host")
+                                permissions+=("--net" "host")
+                                unshare_netns=false
+                                ;;
+                            "bridge")
+                                permissions+=("--net" "bridge")
+                                unshare_netns=false
+                                ;;
+                        esac
+                        ;;
+                    
+                    # Display permissions
+                    "x11")
+                        if [[ "$perm_value" == "enable" ]]; then
+                            permissions+=("--volume" "/tmp/.X11-unix:/tmp/.X11-unix:rw")
+                            permissions+=("--env" "DISPLAY=${DISPLAY}")
+                            permissions+=("--env" "XAUTHORITY=${XAUTHORITY:-}")
+                        fi
+                        ;;
+                    "wayland")
+                        if [[ "$perm_value" == "enable" ]]; then
+                            permissions+=("--volume" "${XDG_RUNTIME_DIR}/${WAYLAND_DISPLAY:-wayland-0}:${XDG_RUNTIME_DIR}/${WAYLAND_DISPLAY:-wayland-0}:rw")
+                            permissions+=("--env" "WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-wayland-0}")
+                        fi
+                        ;;
+                    
+                    # Hardware permissions
+                    "audio")
+                        if [[ "$perm_value" == "enable" ]]; then
+                            permissions+=("--volume" "/run/user/$(id -u)/pulse:/run/user/$(id -u)/pulse:rw")
+                            permissions+=("--volume" "/dev/snd:/dev/snd:rw")
+                        fi
+                        ;;
+                    "gpu")
+                        if [[ "$perm_value" == "enable" ]]; then
+                            permissions+=("--device" "/dev/dri")
+                            permissions+=("--device" "/dev/nvidia0" "/dev/nvidiactl" "/dev/nvidia-uvm")
+                        fi
+                        ;;
+                    "usb")
+                        if [[ "$perm_value" == "enable" ]]; then
+                            permissions+=("--volume" "/dev/bus/usb:/dev/bus/usb:rw")
+                            unshare_devsys=false
+                        fi
+                        ;;
+                    "webcam")
+                        if [[ "$perm_value" == "enable" ]]; then
+                            permissions+=("--device" "/dev/video0")
+                        fi
+                        ;;
+                    
+                    # Namespace isolation controls
+                    "unshare_netns")
+                        [[ "$perm_value" == "false" ]] && unshare_netns=false
+                        ;;
+                    "unshare_devsys")
+                        [[ "$perm_value" == "false" ]] && unshare_devsys=false
+                        ;;
+                    "unshare_groups")
+                        [[ "$perm_value" == "false" ]] && unshare_groups=false
+                        ;;
+                    "unshare_ipc")
+                        [[ "$perm_value" == "false" ]] && unshare_ipc=false
+                        ;;
+                    "unshare_process")
+                        [[ "$perm_value" == "false" ]] && unshare_process=false
+                        ;;
+                    "unshare_all")
+                        if [[ "$perm_value" == "false" ]]; then
+                            unshare_all=false
+                            unshare_netns=false
+                            unshare_devsys=false
+                            unshare_groups=false
+                            unshare_ipc=false
+                            unshare_process=false
+                        elif [[ "$perm_value" == "true" ]]; then
+                            unshare_all=true
+                        fi
+                        ;;
+                    
+                    # Security permissions
+                    "privileged")
+                        if [[ "$perm_value" == "enable" ]]; then
+                            permissions+=("--privileged")
+                        fi
+                        ;;
+                    "root")
+                        if [[ "$perm_value" == "enable" ]]; then
+                            permissions+=("--root")
+                        fi
+                        ;;
+                    "init")
+                        if [[ "$perm_value" == "enable" ]]; then
+                            permissions+=("--init")
+                        fi
+                        ;;
+                    "hostname")
+                        permissions+=("--hostname" "$perm_value")
+                        ;;
+                    
+                    # Additional capabilities
+                    "cap_add")
+                        permissions+=("--cap-add" "$perm_value")
+                        ;;
+                    "security_opt")
+                        permissions+=("--security-opt" "$perm_value")
+                        ;;
+                esac
+            fi
+        done < "$PERMISSIONS_FILE"
+    fi
+    
+    # Apply unshare flags based on final state
+    [[ "$unshare_netns" == true ]] && unshare_flags+=("--unshare-netns")
+    [[ "$unshare_devsys" == true ]] && unshare_flags+=("--unshare-devsys")
+    [[ "$unshare_groups" == true ]] && unshare_flags+=("--unshare-groups")
+    [[ "$unshare_ipc" == true ]] && unshare_flags+=("--unshare-ipc")
+    [[ "$unshare_process" == true ]] && unshare_flags+=("--unshare-process")
+    [[ "$unshare_all" == true ]] && unshare_flags+=("--unshare-all")
+    
+    # Output all flags
+    printf '%s\n' "${unshare_flags[@]}" "${permissions[@]}"
+}
+
+# Create hardened container
+create_container() {
+    local container_name="$1"
+    local image="${2:-docker.io/library/ubuntu:22.04}"
+    
+    log "Creating hardened container: $container_name"
+    log "Using image: $image"
+    
+    # Create isolated home
+    local isolated_home
+    isolated_home=$(create_isolated_home "$container_name")
+    
+    # Get additional permissions
+    local all_flags
+    readarray -t all_flags < <(get_permissions "$container_name")
+    
+    # Base security arguments
+    local base_args=(
+        "--name" "$container_name"
+        "--image" "$image"
+        "--home" "$isolated_home"
+        "--no-entry"  # Don't auto-enter after creation
+    )
+    
+    # Add security flags
+    local security_flags=(
+        "--additional-flags" "--security-opt=no-new-privileges:true"
+        "--additional-flags" "--cap-drop=ALL"
+        "--additional-flags" "--read-only-tmpfs"
+    )
+    
+    # Combine all arguments
+    local final_args=("${base_args[@]}")
+    
+    # Add unshare and permission flags
+    for flag in "${all_flags[@]}"; do
+        if [[ "$flag" == --* ]]; then
+            final_args+=("$flag")
+        else
+            final_args+=("--additional-flags" "$flag")
+        fi
+    done
+    
+    # Add security flags last (can be overridden by permissions)
+    final_args+=("${security_flags[@]}")
+    
+    # Create the container
+    if distrobox create "${final_args[@]}"; then
+        log "Container '$container_name' created successfully"
+        log "Isolated home: $isolated_home"
+        
+        # Show applied flags
+        if [[ ${#all_flags[@]} -gt 0 ]]; then
+            log "Applied security and permission flags:"
+            printf '  %s\n' "${all_flags[@]}"
+        else
+            warn "Maximum security isolation applied (default)."
+        fi
+        
+        log "To enter the container: distrobox enter $container_name"
+    else
+        error "Failed to create container '$container_name'"
+        exit 1
+    fi
+}
+
+# Grant permission to existing container
+grant_permission() {
+    local container_name="$1"
+    local perm_type="$2"
+    local perm_value="$3"
+    
+    # Validate permission type
+    local valid_perms=(
+        "home_folder" "mount" "network" "x11" "wayland" "audio" "gpu" "usb" "webcam"
+        "unshare_netns" "unshare_devsys" "unshare_groups" "unshare_ipc" "unshare_process" "unshare_all"
+        "privileged" "root" "init" "hostname" "cap_add" "security_opt"
+    )
+    
+    if [[ ! " ${valid_perms[*]} " =~ " ${perm_type} " ]]; then
+        error "Invalid permission type: $perm_type"
+        echo "Valid types: ${valid_perms[*]}"
+        exit 1
+    fi
+    
+    # Add permission to config file
+    echo "${container_name}:${perm_type}:${perm_value}" >> "$PERMISSIONS_FILE"
+    log "Permission granted: $container_name -> $perm_type:$perm_value"
+    warn "You need to recreate the container for changes to take effect:"
+    echo "  $SCRIPT_NAME recreate $container_name"
+}
+
+# Revoke permission
+revoke_permission() {
+    local container_name="$1"
+    local perm_type="$2"
+    
+    # Remove permission from config file
+    local temp_file
+    temp_file=$(mktemp)
+    grep -v "^${container_name}:${perm_type}:" "$PERMISSIONS_FILE" > "$temp_file" || true
+    mv "$temp_file" "$PERMISSIONS_FILE"
+    log "Permission revoked: $container_name -> $perm_type"
+    warn "You need to recreate the container for changes to take effect"
+}
+
+# List permissions
+list_permissions() {
+    local container_name="$1"
+    
+    log "Permissions for container '$container_name':"
+    if [[ -f "$PERMISSIONS_FILE" ]]; then
+        local found=false
+        grep "^${container_name}:" "$PERMISSIONS_FILE" | while IFS=':' read -r name perm_type perm_value; do
+            echo "  $perm_type: $perm_value"
+            found=true
+        done
+        if [[ "$found" == false ]]; then
+            echo "  No custom permissions configured (maximum security isolation)"
+        fi
+    else
+        echo "  No permissions configured (maximum security isolation)"
+    fi
+}
+
+# Recreate container with current permissions
+recreate_container() {
+    local container_name="$1"
+    
+    log "Recreating container '$container_name' with current permissions"
+    
+    # Stop and remove existing container
+    if distrobox list | grep -q "^$container_name"; then
+        distrobox stop "$container_name" 2>/dev/null || true
+        distrobox rm "$container_name" --force 2>/dev/null || true
+    fi
+    
+    # Get image from existing config or use default
+    local image="docker.io/library/ubuntu:22.04"
+    create_container "$container_name" "$image"
+}
+
+# Show usage
+show_usage() {
+    cat << EOF
+Usage: $SCRIPT_NAME <command> [options]
+
+Commands:
+  create <name> [image]     Create a new hardened container
+  grant <name> <type> <val> Grant permission to container
+  revoke <name> <type>      Revoke permission from container
+  list <name>               List permissions for container
+  recreate <name>           Recreate container with current permissions
+  edit                      Edit permissions file directly
+  help                      Show this help message
+
+Permission Types:
+
+FILESYSTEM:
+  home_folder <path>        Mount host directory (e.g., /home/user/Documents)
+  mount <src>:<dst>         Mount host path to container path
+
+NETWORK:
+  network host              Enable host networking
+  network bridge            Enable bridge networking
+
+DISPLAY:
+  x11 enable                Enable X11 forwarding
+  wayland enable            Enable Wayland support
+
+HARDWARE:
+  audio enable              Enable audio passthrough
+  gpu enable                Enable GPU access
+  usb enable                Enable USB device access
+  webcam enable             Enable webcam access
+
+NAMESPACE ISOLATION (set to false to disable isolation):
+  unshare_netns false       Disable network namespace isolation
+  unshare_devsys false      Disable /dev and /sys isolation
+  unshare_groups false      Disable group isolation
+  unshare_ipc false         Disable IPC isolation
+  unshare_process false     Disable process isolation
+  unshare_all false         Disable all namespace isolation
+
+SECURITY (USE WITH CAUTION):
+  privileged enable         Run in privileged mode
+  root enable               Allow root access
+  init enable               Enable init system
+  hostname <name>           Set custom hostname
+  cap_add <capability>      Add specific capabilities
+  security_opt <option>    Modify security options
+
+Examples:
+  $SCRIPT_NAME create mydev
+  $SCRIPT_NAME create mydev docker.io/library/fedora:39
+  $SCRIPT_NAME grant mydev home_folder /home/user/Projects
+  $SCRIPT_NAME grant mydev audio enable
+  $SCRIPT_NAME grant mydev unshare_netns false
+  $SCRIPT_NAME grant mydev mount /media/usb:/mnt/usb
+  $SCRIPT_NAME recreate mydev
+  $SCRIPT_NAME list mydev
+
+Default Image: docker.io/library/ubuntu:22.04
+
+Security Note:
+  Containers are created with maximum isolation by default.
+  All access must be explicitly granted through the permission system.
+  Default isolation includes: network, device/sys, groups, IPC, and process namespaces.
+
+EOF
+}
+
+# Main function
+main() {
+    check_deps
+    init_dirs
+    
+    case "${1:-help}" in
+        "create")
+            if [[ $# -lt 2 ]]; then
+                error "Container name required"
+                show_usage
+                exit 1
+            fi
+            create_container "$2" "${3:-}"
+            ;;
+        "grant")
+            if [[ $# -lt 4 ]]; then
+                error "Usage: grant <container> <permission_type> <value>"
+                exit 1
+            fi
+            grant_permission "$2" "$3" "$4"
+            ;;
+        "revoke")
+            if [[ $# -lt 3 ]]; then
+                error "Usage: revoke <container> <permission_type>"
+                exit 1
+            fi
+            revoke_permission "$2" "$3"
+            ;;
+        "list")
+            if [[ $# -lt 2 ]]; then
+                error "Container name required"
+                exit 1
+            fi
+            list_permissions "$2"
+            ;;
+        "recreate")
+            if [[ $# -lt 2 ]]; then
+                error "Container name required"
+                exit 1
+            fi
+            recreate_container "$2"
+            ;;
+        "edit")
+            "${EDITOR:-nano}" "$PERMISSIONS_FILE"
+            ;;
+        "help"|"--help"|"-h")
+            show_usage
+            ;;
+        *)
+            error "Unknown command: $1"
+            show_usage
+            exit 1
+            ;;
+    esac
+}
+
+main "$@"
