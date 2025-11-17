@@ -1,0 +1,87 @@
+#compdef distrobox-secure
+
+# Zsh completion script for distrobox-secure
+
+local -a commands=(
+    'create:Create a new hardened container'
+    'grant:Grant permission to a container'
+    'revoke:Revoke permission from a container'
+    'list:List permissions for a container'
+    'recreate:Recreate container with current permissions'
+    'edit:Edit permissions file directly'
+    'help:Show help message'
+)
+
+local -a perm_types=(
+    'home_folder:Mount host directory'
+    'mount:Mount with custom source and destination'
+    'network:Configure networking (host/bridge)'
+    'x11:Enable X11 forwarding'
+    'wayland:Enable Wayland support'
+    'audio:Enable audio passthrough'
+    'gpu:Enable GPU access'
+    'usb:Enable USB device access'
+    'webcam:Enable webcam access'
+    'unshare_netns:Configure network namespace isolation'
+    'unshare_devsys:Configure /dev and /sys isolation'
+    'unshare_groups:Configure group isolation'
+    'unshare_ipc:Configure IPC isolation'
+    'unshare_process:Configure process isolation'
+    'unshare_all:Configure all namespace isolation'
+    'privileged:Run in privileged mode'
+    'root:Allow root access'
+    'init:Enable init system'
+    'hostname:Set custom hostname'
+    'cap_add:Add specific capabilities'
+    'security_opt:Modify security options'
+)
+
+_containers() {
+    # Get list of existing containers from distrobox
+    local -a containers
+    if command -v distrobox &> /dev/null; then
+        containers=( ${(f)"$(distrobox list 2>/dev/null | tail -n +2 | awk '{print $1}')"} )
+    fi
+    _describe 'container' containers
+}
+
+_arguments \
+    '1: :->command' \
+    '2: :->args' \
+    '3: :->args' \
+    '4: :->args'
+
+case $state in
+    command)
+        _describe 'command' commands
+        ;;
+    args)
+        case $words[2] in
+            create)
+                # No completion for create arguments
+                ;;
+            grant)
+                case $((cword-2)) in
+                    1) _containers ;;
+                    2) _describe 'permission' perm_types ;;
+                esac
+                ;;
+            revoke)
+                case $((cword-2)) in
+                    1) _containers ;;
+                    2) _describe 'permission' perm_types ;;
+                esac
+                ;;
+            list)
+                case $((cword-2)) in
+                    1) _containers ;;
+                esac
+                ;;
+            recreate)
+                case $((cword-2)) in
+                    1) _containers ;;
+                esac
+                ;;
+        esac
+        ;;
+esac

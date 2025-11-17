@@ -100,6 +100,30 @@ check_deps() {
     done
 }
 
+# Validate container name
+validate_container_name() {
+    local name="$1"
+    if [[ ! "$name" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+        error "Invalid container name: '$name'. Must contain only alphanumeric characters, dots, hyphens, and underscores."
+        return 1
+    fi
+    return 0
+}
+
+# Validate filesystem path exists
+validate_path() {
+    local path="$1"
+    if [[ ! -e "$path" ]] && [[ ! -d "$path" ]]; then
+        warn "Path does not exist: $path (this will be created on mount)"
+        return 0
+    fi
+    if [[ ! -r "$path" ]]; then
+        error "Path is not readable: $path"
+        return 1
+    fi
+    return 0
+}
+
 # Create isolated home directory for container
 create_isolated_home() {
     local container_name="$1"
@@ -157,7 +181,9 @@ get_permissions() {
                         permissions+=("--volume" "${perm_value}:${perm_value}:rw")
                         ;;
                     "mount")
-                        IFS=':' read -r src_path dst_path <<< "$perm_value"
+                        # Parse mount as src:dst, handling paths with colons
+                        local src_path="${perm_value%%:*}"  # Everything before first colon
+                        local dst_path="${perm_value#*:}"   # Everything after first colon
                         permissions+=("--volume" "${src_path}:${dst_path}:rw")
                         ;;
                     
@@ -292,18 +318,23 @@ get_permissions() {
 create_container() {
     local container_name="$1"
     local image="${2:-docker.io/library/ubuntu:22.04}"
-    
+
+    # Validate container name
+    if ! validate_container_name "$container_name"; then
+        exit 1
+    fi
+
     log "Creating hardened container: $container_name"
     log "Using image: $image"
-    
+
     # Create isolated home
     local isolated_home
     isolated_home=$(create_isolated_home "$container_name")
-    
+
     # Get additional permissions
     local all_flags
     readarray -t all_flags < <(get_permissions "$container_name")
-    
+
     # Base security arguments
     local base_args=(
         "--name" "$container_name"
@@ -311,17 +342,17 @@ create_container() {
         "--home" "$isolated_home"
         "--no-entry"  # Don't auto-enter after creation
     )
-    
+
     # Add security flags
     local security_flags=(
         "--additional-flags" "--security-opt=no-new-privileges:true"
         "--additional-flags" "--cap-drop=ALL"
         "--additional-flags" "--read-only-tmpfs"
     )
-    
+
     # Combine all arguments
     local final_args=("${base_args[@]}")
-    
+
     # Add unshare and permission flags
     for flag in "${all_flags[@]}"; do
         if [[ "$flag" == --* ]]; then
@@ -330,15 +361,20 @@ create_container() {
             final_args+=("--additional-flags" "$flag")
         fi
     done
-    
+
     # Add security flags last (can be overridden by permissions)
     final_args+=("${security_flags[@]}")
-    
+
     # Create the container
     if distrobox create "${final_args[@]}"; then
         log "Container '$container_name' created successfully"
         log "Isolated home: $isolated_home"
-        
+
+        # Store image metadata for later recreation
+        local metadata_dir="${DISTROBOX_BASE_DIR}/.metadata"
+        mkdir -p "$metadata_dir"
+        echo "$image" > "${metadata_dir}/${container_name}.image"
+
         # Show applied flags
         if [[ ${#all_flags[@]} -gt 0 ]]; then
             log "Applied security and permission flags:"
@@ -346,7 +382,7 @@ create_container() {
         else
             warn "Maximum security isolation applied (default)."
         fi
-        
+
         log "To enter the container: distrobox enter $container_name"
     else
         error "Failed to create container '$container_name'"
@@ -359,20 +395,38 @@ grant_permission() {
     local container_name="$1"
     local perm_type="$2"
     local perm_value="$3"
-    
+
+    # Validate container name
+    if ! validate_container_name "$container_name"; then
+        exit 1
+    fi
+
     # Validate permission type
     local valid_perms=(
         "home_folder" "mount" "network" "x11" "wayland" "audio" "gpu" "usb" "webcam"
         "unshare_netns" "unshare_devsys" "unshare_groups" "unshare_ipc" "unshare_process" "unshare_all"
         "privileged" "root" "init" "hostname" "cap_add" "security_opt"
     )
-    
+
     if [[ ! " ${valid_perms[*]} " =~ " ${perm_type} " ]]; then
         error "Invalid permission type: $perm_type"
         echo "Valid types: ${valid_perms[*]}"
         exit 1
     fi
-    
+
+    # Validate path-based permissions
+    case "$perm_type" in
+        "home_folder"|"mount")
+            # For mount, parse both source and destination paths
+            if [[ "$perm_type" == "mount" ]]; then
+                local src_path="${perm_value%%:*}"
+                validate_path "$src_path" || exit 1
+            else
+                validate_path "$perm_value" || exit 1
+            fi
+            ;;
+    esac
+
     # Add permission to config file
     echo "${container_name}:${perm_type}:${perm_value}" >> "$PERMISSIONS_FILE"
     log "Permission granted: $container_name -> $perm_type:$perm_value"
@@ -397,14 +451,16 @@ revoke_permission() {
 # List permissions
 list_permissions() {
     local container_name="$1"
-    
+
     log "Permissions for container '$container_name':"
     if [[ -f "$PERMISSIONS_FILE" ]]; then
         local found=false
-        grep "^${container_name}:" "$PERMISSIONS_FILE" | while IFS=':' read -r name perm_type perm_value; do
-            echo "  $perm_type: $perm_value"
-            found=true
-        done
+        while IFS=':' read -r name perm_type perm_value; do
+            if [[ "$name" == "$container_name" ]]; then
+                echo "  $perm_type: $perm_value"
+                found=true
+            fi
+        done < "$PERMISSIONS_FILE"
         if [[ "$found" == false ]]; then
             echo "  No custom permissions configured (maximum security isolation)"
         fi
@@ -416,17 +472,21 @@ list_permissions() {
 # Recreate container with current permissions
 recreate_container() {
     local container_name="$1"
-    
+
     log "Recreating container '$container_name' with current permissions"
-    
+
     # Stop and remove existing container
     if distrobox list | grep -q "^$container_name"; then
         distrobox stop "$container_name" 2>/dev/null || true
         distrobox rm "$container_name" --force 2>/dev/null || true
     fi
-    
-    # Get image from existing config or use default
+
+    # Get image from metadata or use default
+    local metadata_file="${DISTROBOX_BASE_DIR}/.metadata/${container_name}.image"
     local image="docker.io/library/ubuntu:22.04"
+    if [[ -f "$metadata_file" ]]; then
+        image=$(cat "$metadata_file")
+    fi
     create_container "$container_name" "$image"
 }
 
