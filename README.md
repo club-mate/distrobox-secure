@@ -42,10 +42,59 @@ Traditional Distrobox containers have access to your entire home directory, netw
 
 ### Installation
 
+#### Automated Installation (Recommended)
+
+```bash
+# Clone or download the repository
+git clone https://github.com/club-mate/distrobox-secure.git
+cd distrobox-secure
+
+# Run the install script
+bash install.sh
+```
+
+The installer will:
+- ✅ Verify dependencies (`distrobox` and `podman`)
+- ✅ Install the binary to `~/.local/bin/distrobox-secure`
+- ✅ Install bash and zsh completions
+- ✅ Check if `~/.local/bin` is in your PATH
+
+#### Manual Installation
+
 1. **Prerequisites**: Ensure you have `distrobox` and `podman` installed
 2. **Download**: Save the script as `distrobox-secure`
 3. **Make executable**: `chmod +x distrobox-secure`
-4. **Optional**: Move to your PATH for global access
+4. **Move to PATH**: `mv distrobox-secure ~/.local/bin/`
+
+#### Uninstallation
+
+```bash
+# Run the uninstall script (if installed via install.sh)
+bash uninstall.sh
+
+# Or manually remove:
+rm ~/.local/bin/distrobox-secure
+```
+
+### Shell Completion
+
+After installation, enable shell completion:
+
+**Bash:**
+```bash
+# The completion is installed automatically to:
+~/.local/share/bash-completion/completions/distrobox-secure
+# It will be loaded automatically on next shell restart
+```
+
+**Zsh:**
+```bash
+# The completion is installed automatically to:
+~/.zsh/completions/_distrobox-secure
+# Add this to your ~/.zshrc if not already there:
+fpath=(~/.zsh/completions $fpath)
+autoload -Uz compinit && compinit
+```
 
 ### Basic Usage
 
@@ -304,3 +353,123 @@ distrobox-secure recreate research
 ### Security Considerations
 - 🤔 Containers still share the kernel (use gVisor/Kata for stronger isolation)
 - 🤔 Root inside container is still root (use rootless podman)
+
+## 🧪 Testing
+
+### Run Test Suite
+
+The project includes a comprehensive test suite that validates:
+- Container name validation
+- Path validation and parsing
+- Permission configuration parsing
+- Home directory structure creation
+- Permission listing functionality
+
+```bash
+# Run all tests
+bash tests/test_distrobox_secure.sh
+
+# Expected output:
+# === Distrobox Secure Test Suite ===
+# [TEST] validate_container_name - Valid names
+#   ✓ PASS
+# [TEST] validate_container_name - Invalid names
+#   ✓ PASS
+# ...
+# === Test Results ===
+# Total: 10
+# Passed: 10
+# Failed: 0
+# All tests passed!
+```
+
+### Continuous Integration
+
+This project uses GitHub Actions for automated testing:
+
+- **ShellCheck Linting**: Validates bash syntax and style
+- **Unit Tests**: Runs the test suite on every push and pull request
+- **Bash Syntax Check**: Ensures all scripts are syntactically correct
+- **Documentation**: Validates that README and LICENSE files exist
+
+View the workflow at: `.github/workflows/tests.yml`
+
+## 🐛 Troubleshooting
+
+### Issue: "distrobox-secure: command not found"
+
+**Solution**: Ensure `~/.local/bin` is in your PATH:
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+# Add this to your ~/.bashrc or ~/.zshrc to make it permanent
+```
+
+### Issue: Permission denied when creating containers
+
+**Solution**: Ensure podman is properly configured:
+```bash
+# Check podman installation
+podman --version
+
+# Verify you can run podman as non-root
+podman run --rm alpine echo "OK"
+```
+
+### Issue: Container can't access mounted directories
+
+**Solution**: Check directory permissions:
+```bash
+# List granted permissions
+distrobox-secure list <container-name>
+
+# Verify the mounted path exists and is readable
+ls -la /path/to/mounted/folder
+
+# Recreate container to apply permissions
+distrobox-secure recreate <container-name>
+```
+
+### Issue: X11/Wayland applications don't display
+
+**Solution**: Verify display forwarding is enabled:
+```bash
+# Check if X11 permission is granted
+distrobox-secure list <container-name> | grep x11
+
+# Grant X11 access and recreate
+distrobox-secure grant <container-name> x11 enable
+distrobox-secure recreate <container-name>
+```
+
+## 📝 Contributing
+
+Contributions are welcome! Please:
+
+1. **Report issues**: Use the GitHub issue tracker
+2. **Test your changes**: Run `bash tests/test_distrobox_secure.sh`
+3. **Check syntax**: The CI pipeline runs ShellCheck on all scripts
+4. **Update documentation**: Keep the README and comments in sync with changes
+
+## 📋 Changelog
+
+### v0.1.0 (Current)
+- Initial release
+- Zero-trust security model with maximum isolation by default
+- Comprehensive permission system for filesystem, network, hardware, and display access
+- Isolated home directories for each container
+- Automated testing suite with 10 unit tests
+- GitHub Actions CI/CD pipeline
+- Bash and Zsh shell completions
+- Installation and uninstallation scripts
+- Input validation for container names and paths
+
+## 📄 License
+
+GPL v3 - See LICENSE file for details
+
+## 🤝 Support
+
+For issues, questions, or suggestions:
+- Open an issue on GitHub
+- Check existing documentation in the README
+- Run tests to validate your setup

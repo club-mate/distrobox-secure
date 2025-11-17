@@ -1,0 +1,37 @@
+# User data directories
+.local/share/distrobox-secure/
+.config/distrobox-secure/
+
+# Temporary files
+*.swp
+*.swo
+*~
+*.tmp
+*.bak
+
+# System files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+*.iml
+.project
+.classpath
+*.sublime-project
+*.sublime-workspace
+
+# Build artifacts
+*.o
+*.a
+*.so
+
+# Test coverage
+coverage/
+.coverage
+*.lcov
+
+# Node modules (if used in testing)
+node_modules/
+npm-debug.log

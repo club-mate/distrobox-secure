@@ -1,0 +1,67 @@
+name: Tests and Linting
+
+on:
+  push:
+    branches: [ main, master, develop ]
+  pull_request:
+    branches: [ main, master, develop ]
+
+jobs:
+  shellcheck:
+    name: ShellCheck Linting
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Run ShellCheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+          shellcheck --version
+          shellcheck distrobox-secure install.sh uninstall.sh tests/test_distrobox_secure.sh
+
+  tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bash
+
+      - name: Run test suite
+        run: |
+          cd tests
+          bash test_distrobox_secure.sh
+
+  documentation:
+    name: Documentation Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Check if README exists
+        run: |
+          test -f README.md || (echo "README.md not found" && exit 1)
+          test -f LICENSE || (echo "LICENSE not found" && exit 1)
+
+      - name: Validate Markdown
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y markdownlint-cli
+          markdownlint README.md || true  # Warn but don't fail
+
+  syntax:
+    name: Bash Syntax Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Check bash syntax
+        run: |
+          bash -n distrobox-secure
+          bash -n install.sh
+          bash -n uninstall.sh
+          bash -n tests/test_distrobox_secure.sh
