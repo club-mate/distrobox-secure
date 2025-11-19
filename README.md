@@ -1,6 +1,55 @@
 # Distrobox Secure
 
-A comprehensive security-first wrapper for Distrobox that creates hardened container instances with isolated home directories, complete namespace isolation, and a granular opt-in permission system.
+A comprehensive security-first wrapper for [Distrobox](https://github.com/89luca89/distrobox) that creates hardened container instances with isolated home directories, complete namespace isolation, and a granular opt-in permission system.
+
+## Experimenteller Status
+
+**WARNUNG: Diese Software befindet sich in einem experimentellen Entwicklungsstadium.**
+
+Dieses Projekt ist ein unabhängiger, inoffizieller Wrapper um Distrobox und wurde nicht von den Distrobox- oder Podman-Entwicklern erstellt oder geprüft. Bitte beachten Sie:
+
+- Die Software wurde noch nicht umfassend in Produktionsumgebungen getestet
+- Sicherheitsfunktionen können Lücken oder unerwartetes Verhalten aufweisen
+- Es können Breaking Changes ohne vorherige Ankündigung erfolgen
+- Die Nutzung erfolgt auf eigenes Risiko
+
+**Empfehlung**: Verwenden Sie diese Software zunächst nur in Testumgebungen und prüfen Sie die Funktionalität gründlich, bevor Sie sie für wichtige Arbeiten einsetzen.
+
+## Risiken und Haftungsausschluss
+
+### Sicherheitshinweise
+
+- **Container-Isolation ist nicht perfekt**: Alle Container teilen denselben Kernel mit dem Host-System. Für stärkere Isolation sollten Sie Technologien wie [gVisor](https://gvisor.dev/) oder [Kata Containers](https://katacontainers.io/) in Betracht ziehen
+- **Root-Privilegien**: Auch wenn rootless Podman verwendet wird, können Container-Escapes theoretisch möglich sein
+- **Keine Garantie**: Diese Software wird "wie besehen" bereitgestellt, ohne jegliche ausdrückliche oder stillschweigende Garantie
+
+### Potenzielle Risiken
+
+1. **Datenverlust**: Fehlerhafte Konfiguration kann zu Datenverlust führen
+2. **Sicherheitslücken**: Der Wrapper kann Sicherheitslücken enthalten, die in Distrobox nicht vorhanden sind
+3. **Inkompatibilitäten**: Zukünftige Distrobox-Updates können die Funktionalität beeinträchtigen
+4. **Fehlkonfiguration**: Falsche Berechtigungseinstellungen können die Isolation untergraben
+
+## Kompatibilität
+
+### Getestete Versionen
+
+- **Distrobox**: Getestet mit Version 1.7.x - 1.8.x
+- **Podman**: Getestet mit Version 4.x - 5.x
+
+### Systemanforderungen
+
+- Linux-basiertes Betriebssystem
+- [Distrobox](https://github.com/89luca89/distrobox) (>= 1.4.0)
+- [Podman](https://github.com/containers/podman) (>= 3.0) oder Docker
+
+### Lizenzkompatibilität
+
+Dieses Projekt ist unter der **GPL-3.0 Lizenz** veröffentlicht und ist vollständig kompatibel mit:
+- **Distrobox** (GPL-3.0)
+- **Podman** (Apache License 2.0)
+
+Da dieser Wrapper Distrobox und Podman als externe Tools über die Kommandozeile aufruft, bestehen keine lizenzrechtlichen Bedenken.
 
 ## 🔒 Security Philosophy
 
@@ -463,9 +512,48 @@ Contributions are welcome! Please:
 - Installation and uninstallation scripts
 - Input validation for container names and paths
 
+## Danksagungen / Acknowledgments
+
+Dieses Projekt wäre ohne die hervorragende Arbeit der folgenden Open-Source-Projekte nicht möglich:
+
+### Kernabhängigkeiten
+
+- **[Distrobox](https://github.com/89luca89/distrobox)** - Das Fundament dieses Projekts. Distrobox ermöglicht die Nutzung beliebiger Linux-Distributionen im Terminal mit nahtloser Host-Integration. Entwickelt von [Luca Di Maio](https://github.com/89luca89).
+  - Lizenz: GPL-3.0
+  - Website: https://distrobox.it/
+
+- **[Podman](https://github.com/containers/podman)** - Ein daemonloser Container-Engine für die Entwicklung, Verwaltung und Ausführung von OCI-Containern auf Linux-Systemen.
+  - Lizenz: Apache License 2.0
+  - Website: https://podman.io/
+  - Entwickelt von der [Containers](https://github.com/containers) Community
+
+### Erwähnte Technologien
+
+- **[Docker](https://www.docker.com/)** - Alternative Container-Runtime (kann anstelle von Podman verwendet werden)
+- **[OCI (Open Container Initiative)](https://opencontainers.org/)** - Container-Standards, die Podman und Docker implementieren
+- **[gVisor](https://gvisor.dev/)** - Application Kernel für stärkere Container-Isolation
+- **[Kata Containers](https://katacontainers.io/)** - Lightweight VMs für sichere Container-Ausführung
+
+### Container-Images
+
+Die Standardkonfiguration verwendet Images von:
+- **[Docker Hub](https://hub.docker.com/)** - Ubuntu, Fedora und andere offizielle Distribution-Images
+- **[Quay.io](https://quay.io/)** - Container-Registry von Red Hat
+
+### Weitere Ressourcen
+
+- **[ArchWiki - Distrobox](https://wiki.archlinux.org/title/Distrobox)** - Umfassende Dokumentation
+- **[Fedora Magazine](https://fedoramagazine.org/)** - Tutorials zu Distrobox und Podman
+
+---
+
+**Hinweis**: Dieses Projekt steht in keiner offiziellen Verbindung zu Distrobox, Podman, Red Hat oder anderen erwähnten Projekten. Alle Marken gehören ihren jeweiligen Inhabern.
+
 ## 📄 License
 
 GPL v3 - See LICENSE file for details
+
+Diese Lizenz ist kompatibel mit den Lizenzen aller verwendeten Abhängigkeiten (GPL-3.0 für Distrobox, Apache 2.0 für Podman).
 
 ## 🤝 Support
 
@@ -473,3 +561,7 @@ For issues, questions, or suggestions:
 - Open an issue on GitHub
 - Check existing documentation in the README
 - Run tests to validate your setup
+
+---
+
+*Letzte Aktualisierung: November 2025*
